@@ -25,9 +25,12 @@ jobs:
       
       - name: 📦 의존성 설치
         run: |
-          pip install requests
+          pip install requests firebase-admin
       
       - name: 🎰 로또 데이터 업데이트
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FCM_TOPIC: ${{ secrets.FCM_TOPIC }}
         run: |
           python update_lotto_data.py
       

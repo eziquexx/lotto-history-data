@@ -1,15 +1,69 @@
 #!/usr/bin/env python3
 # update_lotto_data.py
-# 동행복권 API에서 최신 회차를 가져와 JSON 파일을 업데이트합니다.
+# 동행복권 API에서 최신 회차를 가져와 JSON 파일을 업데이트하고 FCM 알림을 발송합니다.
 
 import json
 import requests
 import time
+import os
+import sys
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, messaging
 
 # 설정
 JSON_FILE = 'lotto-history.json'
 API_URL = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo='
+
+# Firebase 초기화 (선택적)
+def init_firebase():
+    """Firebase Admin SDK 초기화"""
+    try:
+        service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
+        if not service_account_json:
+            print("⚠️ Firebase 서비스 계정 정보가 없습니다. 알림을 건너뜁니다.")
+            return False
+        
+        cred_dict = json.loads(service_account_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        print("✅ Firebase 초기화 완료")
+        return True
+    except Exception as e:
+        print(f"⚠️ Firebase 초기화 실패: {e}")
+        return False
+
+def send_fcm_notification(draw_data):
+    """FCM 토픽으로 당첨번호 알림 발송"""
+    try:
+        topic = os.environ.get('FCM_TOPIC', 'all_users')
+        
+        # 당첨번호 포맷팅
+        numbers = f"{draw_data['tm1WnNo']}, {draw_data['tm2WnNo']}, {draw_data['tm3WnNo']}, {draw_data['tm4WnNo']}, {draw_data['tm5WnNo']}, {draw_data['tm6WnNo']}"
+        bonus = draw_data['bnsWnNo']
+        
+        # 메시지 생성
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=f"🎰 제 {draw_data['ltEpsd']}회 로또 당첨번호",
+                body=f"{numbers} + {bonus}",
+            ),
+            data={
+                'type': 'lotto_result',
+                'draw_no': str(draw_data['ltEpsd']),
+                'numbers': numbers,
+                'bonus': str(bonus),
+            },
+            topic=topic,
+        )
+        
+        # 발송
+        response = messaging.send(message)
+        print(f"✅ FCM 알림 발송 완료: {response}")
+        return True
+    except Exception as e:
+        print(f"❌ FCM 알림 발송 실패: {e}")
+        return False
 
 def fetch_draw_data(draw_no):
     """특정 회차의 로또 데이터를 API에서 가져옵니다."""
@@ -89,6 +143,9 @@ def main():
     print("🎰 로또 데이터 업데이트 시작...")
     print(f"⏰ 현재 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
+    # Firebase 초기화 (알림용)
+    firebase_initialized = init_firebase()
+    
     # 1. 기존 데이터 로드
     existing_data = load_existing_data()
     
@@ -120,7 +177,7 @@ def main():
         
         time.sleep(1)  # API 호출 간격 (서버 부담 방지)
     
-    # 4. 새로운 회차가 있으면 저장
+    # 4. 새로운 회차가 있으면 저장 및 알림
     if new_draws:
         print(f"\n🎉 {len(new_draws)}개의 새로운 회차 발견!")
         for draw in new_draws:
@@ -135,6 +192,12 @@ def main():
         # 저장
         if save_data(existing_data):
             print(f"✅ 업데이트 완료! 총 {len(existing_data)}개 회차")
+            
+            # FCM 알림 발송 (가장 최신 회차만)
+            if firebase_initialized:
+                latest_draw = new_draws[-1]
+                print(f"\n📢 알림 발송 중: {latest_draw['ltEpsd']}회")
+                send_fcm_notification(latest_draw)
         else:
             print("❌ 저장 실패")
     else:
