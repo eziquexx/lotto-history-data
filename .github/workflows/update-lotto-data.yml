@@ -1,0 +1,56 @@
+name: Update Lotto Data
+
+# 매주 토요일 22:00 (KST 기준, UTC는 13:00)에 실행
+on:
+  schedule:
+    - cron: '0 13 * * 6'  # 매주 토요일 13:00 UTC (한국 22:00)
+  
+  # 수동 실행 가능
+  workflow_dispatch:
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 저장소 체크아웃
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🐍 Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 의존성 설치
+        run: |
+          pip install requests
+      
+      - name: 🎰 로또 데이터 업데이트
+        run: |
+          python update_lotto_data.py
+      
+      - name: 📊 변경사항 확인
+        id: check_changes
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "✅ 변경사항 없음"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "🔄 변경사항 발견"
+          fi
+      
+      - name: 💾 변경사항 커밋 및 푸시
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add lotto-history.json
+          git commit -m "🎰 자동 업데이트: $(date +'%Y-%m-%d %H:%M:%S KST')"
+          git push
+      
+      - name: ✅ 완료
+        run: |
+          echo "🎉 작업 완료!"
