@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 # update_lotto_data.py
-# 동행복권 API에서 최신 회차를 가져와 JSON 파일을 업데이트하고 FCM 알림을 발송합니다.
+# 동행복권 웹페이지에서 최신 회차를 크롤링하여 JSON 파일을 업데이트하고 FCM 알림을 발송합니다.
 
 import json
 import requests
 import time
 import os
 import sys
+import re
 from datetime import datetime
+from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, messaging
 
 # 설정
 JSON_FILE = 'lotto-history.json'
-API_URL = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo='
+RESULT_PAGE_URL = 'https://www.dhlottery.co.kr/lt645/result'
+API_URL = 'https://m.dhlottery.co.kr/lt645/selectPstLt645Info.do?ltEpsd='
 
 # Firebase 초기화 (선택적)
 def init_firebase():
@@ -65,6 +68,30 @@ def send_fcm_notification(draw_data):
         print(f"❌ FCM 알림 발송 실패: {e}")
         return False
 
+def get_latest_draw_number():
+    """웹페이지에서 최신 회차 번호를 스크래핑"""
+    try:
+        print("🌐 동행복권 웹페이지에서 최신 회차 확인 중...")
+        
+        response = requests.get(RESULT_PAGE_URL, timeout=10)
+        response.raise_for_status()
+        
+        # JavaScript 코드에서 회차 번호 추출
+        # $("#d-trigger_txt").text("1207" + '회'); 형태를 찾음
+        pattern = r'text\("(\d+)"\s*\+\s*[\'"]회[\'"]\)'
+        match = re.search(pattern, response.text)
+        
+        if match:
+            latest_draw = int(match.group(1))
+            print(f"✅ 웹페이지 최신 회차: {latest_draw}")
+            return latest_draw
+        else:
+            print("⚠️ 웹페이지에서 회차 번호를 찾을 수 없습니다.")
+            return None
+    except Exception as e:
+        print(f"❌ 웹페이지 스크래핑 실패: {e}")
+        return None
+
 def fetch_draw_data(draw_no):
     """특정 회차의 로또 데이터를 API에서 가져옵니다."""
     try:
@@ -73,45 +100,14 @@ def fetch_draw_data(draw_no):
         data = response.json()
         
         # API 응답 확인
-        if data.get('returnValue') != 'success':
+        if not data.get('data') or not data['data'].get('list') or len(data['data']['list']) == 0:
             return None
-            
-        # JSON 형식에 맞게 변환
-        return {
-            'winType0': 0,
-            'winType1': 0,
-            'winType2': 0,
-            'winType3': 0,
-            'gmSqNo': 1,
-            'ltEpsd': data['drwNo'],
-            'tm1WnNo': data['drwtNo1'],
-            'tm2WnNo': data['drwtNo2'],
-            'tm3WnNo': data['drwtNo3'],
-            'tm4WnNo': data['drwtNo4'],
-            'tm5WnNo': data['drwtNo5'],
-            'tm6WnNo': data['drwtNo6'],
-            'bnsWnNo': data['bnusNo'],
-            'ltRflYmd': data['drwNoDate'].replace('-', ''),
-            'rnk1WnNope': data['firstPrzwnerCo'],
-            'rnk1WnAmt': data['firstWinamnt'],
-            'rnk1SumWnAmt': data['firstAccumamnt'],
-            'rnk2WnNope': 0,
-            'rnk2WnAmt': 0,
-            'rnk2SumWnAmt': 0,
-            'rnk3WnNope': 0,
-            'rnk3WnAmt': 0,
-            'rnk3SumWnAmt': 0,
-            'rnk4WnNope': 0,
-            'rnk4WnAmt': 0,
-            'rnk4SumWnAmt': 0,
-            'rnk5WnNope': 0,
-            'rnk5WnAmt': 0,
-            'rnk5SumWnAmt': 0,
-            'sumWnNope': 0,
-            'rlvtEpsdSumNtslAmt': 0,
-            'wholEpsdSumNtslAmt': 0,
-            'excelRnk': ''
-        }
+        
+        # 첫 번째 항목 추출
+        draw_data = data['data']['list'][0]
+        
+        # 이미 올바른 형식이므로 그대로 반환
+        return draw_data
     except Exception as e:
         print(f"❌ {draw_no}회 조회 실패: {e}")
         return None
@@ -155,29 +151,33 @@ def main():
     
     # 2. 현재 최대 회차 확인
     max_draw = max(draw['ltEpsd'] for draw in existing_data)
-    print(f"📊 현재 최대 회차: {max_draw}")
+    print(f"📊 로컬 최대 회차: {max_draw}")
     
-    # 3. 다음 회차부터 최신 회차까지 확인
+    # 3. 웹페이지에서 최신 회차 확인
+    latest_draw = get_latest_draw_number()
+    
+    if not latest_draw:
+        print("⚠️ 최신 회차를 확인할 수 없어 연속 확인 방식으로 진행합니다.")
+        latest_draw = max_draw + 10  # 최대 10회차까지 확인
+    
+    print(f"📊 웹페이지 최신 회차: {latest_draw}")
+    
+    # 4. 새로운 회차 수집
     new_draws = []
-    current_draw = max_draw + 1
-    consecutive_failures = 0
     
-    while consecutive_failures < 3:  # 연속 3회 실패시 중단
-        print(f"🔍 {current_draw}회 확인 중...")
-        draw_data = fetch_draw_data(current_draw)
+    for draw_no in range(max_draw + 1, latest_draw + 1):
+        print(f"🔍 {draw_no}회 확인 중...")
+        draw_data = fetch_draw_data(draw_no)
         
         if draw_data:
-            print(f"✅ {current_draw}회 발견!")
+            print(f"✅ {draw_no}회 발견!")
             new_draws.append(draw_data)
-            current_draw += 1
-            consecutive_failures = 0
         else:
-            print(f"⏭️ {current_draw}회 없음")
-            consecutive_failures += 1
+            print(f"⏭️ {draw_no}회 없음")
         
         time.sleep(1)  # API 호출 간격 (서버 부담 방지)
     
-    # 4. 새로운 회차가 있으면 저장 및 알림
+    # 5. 새로운 회차가 있으면 저장 및 알림
     if new_draws:
         print(f"\n🎉 {len(new_draws)}개의 새로운 회차 발견!")
         for draw in new_draws:

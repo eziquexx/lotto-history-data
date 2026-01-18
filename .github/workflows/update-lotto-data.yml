@@ -1,6 +1,6 @@
 name: Update Lotto Data
 
-# 매주 토요일 22:00 (KST 기준, UTC는 13:00)에 실행
+# 매주 일요일 새벽 1:00 (KST 기준, UTC는 16:00 토요일)에 실행
 on:
   schedule:
     - cron: '0 16 * * 6'  # 매주 토요일 16:00 UTC (한국 일요일 01:00)
@@ -25,7 +25,7 @@ jobs:
       
       - name: 📦 의존성 설치
         run: |
-          pip install requests firebase-admin
+          pip install requests firebase-admin beautifulsoup4
       
       - name: 🎰 로또 데이터 업데이트
         env:
